@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpException,
   Param,
   Post,
   Put,
@@ -27,6 +28,7 @@ import {
   AuthorizationActions,
   Sections,
 } from '@gitroom/backend/services/auth/permissions/permission.exception.class';
+import { PostValidationException } from '@gitroom/backend/api/routes/posts.validation.exception';
 
 @ApiTags('Posts')
 @Controller('/posts')
@@ -112,11 +114,7 @@ export class PostsController {
     @GetOrgFromRequest() org: Organization,
     @Query() query: GetPostsDto
   ) {
-    const posts = await this._postsService.getPosts(org.id, query);
-
-    return {
-      posts,
-    };
+    return this._postsService.getPostsMinified(org.id, query);
   }
 
   @Get('/find-slot')
@@ -148,6 +146,18 @@ export class PostsController {
     return this._postsService.getOldPosts(org.id, date);
   }
 
+  @Get('/group/:group/debug-export')
+  async getPostGroupDebugExport(
+    @GetOrgFromRequest() org: Organization,
+    @GetUserFromRequest() user: User,
+    @Param('group') group: string
+  ) {
+    if (!user.isSuperAdmin) {
+      throw new HttpException('Forbidden', 403);
+    }
+    return this._postsService.getPostGroupDebugExport(org.id, group);
+  }
+
   @Get('/group/:group')
   getPostsByGroup(@GetOrgFromRequest() org: Organization, @Param('group') group: string) {
     return this._postsService.getPostsByGroup(org.id, group);
@@ -158,15 +168,59 @@ export class PostsController {
     return this._postsService.getPost(org.id, id);
   }
 
+  @Post('/valid')
+  async validatePosts(
+    @GetOrgFromRequest() org: Organization,
+    @Body() rawBody: any
+  ) {
+    return this._postsService.validatePosts(org.id, rawBody?.posts || []);
+  }
+
   @Post('/')
   @CheckPolicies([AuthorizationActions.Create, Sections.POSTS_PER_MONTH])
   async createPost(
     @GetOrgFromRequest() org: Organization,
     @Body() rawBody: any
   ) {
-    console.log(JSON.stringify(rawBody, null, 2));
+    // Server-side validation — never trust the client to have validated.
+    const validation = await this._postsService.validatePosts(
+      org.id,
+      rawBody?.posts || []
+    );
+
+    const fail = (item: (typeof validation)[number], error: string) => {
+      throw new PostValidationException({
+        provider: item.identifier,
+        name: item.name,
+        error,
+      });
+    };
+
+    for (const item of validation) {
+      if (item.emptyContent) {
+        fail(
+          item,
+          'Your post should have at least one character or one image.'
+        );
+      }
+    }
+
+    if (rawBody?.type !== 'draft') {
+      for (const item of validation) {
+        if (!item.valid) {
+          fail(item, item.settingsError || 'Please fix your settings');
+        }
+        if (item.errors !== true) {
+          fail(item, item.errors as string);
+        }
+        if (item.tooLong) {
+          fail(item, 'post is too long, please fix it');
+        }
+      }
+    }
+
     const body = await this._postsService.mapTypeToPost(rawBody, org.id);
-    return this._postsService.createPost(org.id, body);
+    return this._postsService.createPost(org.id, body, 'WEB');
   }
 
   @Post('/generator/draft')

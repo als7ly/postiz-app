@@ -9,9 +9,11 @@ import dayjs from 'dayjs';
 import {
   BadBody,
   SocialAbstract,
+  ValidityMedia,
 } from '@gitroom/nestjs-libraries/integrations/social.abstract';
 import { TikTokDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/tiktok.dto';
 import { timer } from '@gitroom/helpers/utils/timer';
+import { hasExtension } from '@gitroom/helpers/utils/has.extension';
 import { Integration } from '@prisma/client';
 import { Rules } from '@gitroom/nestjs-libraries/chat/rules.description.decorator';
 
@@ -36,6 +38,27 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
   editor = 'normal' as const;
   maxLength() {
     return 2000;
+  }
+
+  override async checkValidity(
+    items: Array<ValidityMedia[]>
+  ): Promise<string | true> {
+    const [firstItems] = items ?? [];
+    if ((firstItems?.length ?? 0) === 0) {
+      return 'No video / images selected';
+    }
+    if (
+      (firstItems?.length ?? 0) > 1 &&
+      firstItems?.some((p) => (p?.path?.indexOf?.('mp4') ?? -1) > -1)
+    ) {
+      return 'Only pictures are supported when selecting multiple items';
+    } else if (
+      firstItems?.length !== 1 &&
+      (firstItems?.[0]?.path?.indexOf?.('mp4') ?? -1) > -1
+    ) {
+      return 'You need one media';
+    }
+    return true;
   }
 
   override handleErrors(body: string):
@@ -80,6 +103,14 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
       return {
         type: 'bad-body' as const,
         value: 'File format is invalid, please check video specifications',
+      };
+    }
+
+    if (body.indexOf('app_version_check_failed') > -1) {
+      return {
+        type: 'bad-body' as const,
+        value:
+          'In order to use the TikTok upload feature, you have to update your app to the latest version',
       };
     }
 
@@ -129,7 +160,16 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
     if (body.indexOf('spam_risk_too_many_posts') > -1) {
       return {
         type: 'bad-body' as const,
-        value: 'TikTok says your daily post limit reached, please try again tomorrow',
+        value:
+          'TikTok says your daily post limit reached, please try again tomorrow',
+      };
+    }
+
+    if (body.indexOf('spam_risk_too_many_pending_share') > -1) {
+      return {
+        type: 'bad-body' as const,
+        value:
+          'TikTok limits pending posts to 5 within any 24-hour period. Please check your TikTok inbox in the TikTok mobile app and try again after 24 hours.',
       };
     }
 
@@ -167,7 +207,7 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
     if (body.indexOf('url_ownership_unverified') > -1) {
       return {
         type: 'bad-body' as const,
-        value: 'URL ownership not verified, please verify domain ownership',
+        value: 'You have to upload the picture/video to Postiz when sending a URL',
       };
     }
 
@@ -205,7 +245,7 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
     if (body.indexOf('picture_size_check_failed') > -1) {
       return {
         type: 'bad-body' as const,
-        value: 'Picture / Video size is invalid, must be at least 720p',
+        value: 'Video must be at least 720p, Picture must no exceed 1080p',
       };
     }
 
@@ -440,7 +480,7 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
   }
 
   private buildTikokPostInfoBody(firstPost: PostDetails<TikTokDto>) {
-    const isPhoto = (firstPost?.media?.[0]?.path?.indexOf('mp4') || -1) === -1;
+    const isPhoto = !hasExtension(firstPost?.media?.[0]?.path, 'mp4');
     const method = firstPost?.settings?.content_posting_method;
 
     if (method === 'DIRECT_POST') {
@@ -490,7 +530,7 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
   }
 
   private buildTikokSourceInfoBody(firstPost: PostDetails<TikTokDto>) {
-    const isPhoto = (firstPost?.media?.[0]?.path?.indexOf('mp4') || -1) === -1;
+    const isPhoto = !hasExtension(firstPost?.media?.[0]?.path, 'mp4');
 
     if (isPhoto) {
       return {
@@ -528,7 +568,7 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
     integration: Integration
   ): Promise<PostResponse[]> {
     const [firstPost] = postDetails;
-    const isPhoto = (firstPost?.media?.[0]?.path?.indexOf('mp4') || -1) === -1;
+    const isPhoto = !hasExtension(firstPost?.media?.[0]?.path, 'mp4');
 
     console.log({
       ...this.buildTikokPostInfoBody(firstPost),
@@ -540,7 +580,7 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
       await this.fetch(
         `https://open.tiktokapis.com/v2/post/publish${this.postingMethod(
           firstPost.settings.content_posting_method,
-          (firstPost?.media?.[0]?.path?.indexOf('mp4') || -1) === -1
+          !hasExtension(firstPost?.media?.[0]?.path, 'mp4')
         )}`,
         {
           method: 'POST',

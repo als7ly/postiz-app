@@ -43,6 +43,16 @@ export class IntegrationsController {
     private _refreshIntegrationService: RefreshIntegrationService
   ) {}
 
+  @Post('/provider/:id/connect')
+  @CheckPolicies([AuthorizationActions.Create, Sections.CHANNEL])
+  async saveProviderPage(
+    @GetOrgFromRequest() org: Organization,
+    @Param('id') id: string,
+    @Body() body: any
+  ) {
+    return this._integrationService.saveProviderPage(org.id, id, body);
+  }
+
   @Get('/:identifier/internal-plugs')
   getInternalPlugs(@Param('identifier') identifier: string) {
     return this._integrationManager.getInternalPlugs(identifier);
@@ -91,6 +101,7 @@ export class IntegrationsController {
             internalId: p.internalId,
             disabled: p.disabled,
             editor: findIntegration.editor,
+            stripLinks: !!findIntegration?.stripLinks?.(),
             picture: p.picture || '/no-picture.jpg',
             identifier: p.providerIdentifier,
             inBetweenSteps: p.inBetweenSteps,
@@ -185,6 +196,7 @@ export class IntegrationsController {
     @Param('integration') integration: string,
     @Query('refresh') refresh: string,
     @Query('externalUrl') externalUrl: string,
+    @Query('redirectUrl') redirectUrl: string,
     @Query('onboarding') onboarding: string,
     @GetOrgFromRequest() org: Organization
   ) {
@@ -220,6 +232,10 @@ export class IntegrationsController {
 
       if (onboarding === 'true') {
         await ioRedis.set(`onboarding:${state}`, 'true', 'EX', 3600);
+      }
+
+      if (redirectUrl) {
+        await ioRedis.set(`redirect:${state}`, redirectUrl, 'EX', 3600);
       }
 
       await ioRedis.set(`organization:${state}`, org.id, 'EX', 3600);
@@ -438,9 +454,7 @@ export class IntegrationsController {
   }
 
   @Post('/moltbook/register')
-  async moltbookRegister(
-    @Body() body: { name: string; description: string }
-  ) {
+  async moltbookRegister(@Body() body: { name: string; description: string }) {
     try {
       const provider = new MoltbookProvider();
       const result = await provider.registerAgent(body.name, body.description);
